@@ -1,6 +1,68 @@
 // Our application will all be contained within this "app" object.
 var app = {};
 
+// Tool for measuring lengths in the ui.Map().
+Map.setControlVisibility({zoomControl:false});
+Map.remove(Map.drawingTools());
+
+var tool = ui.Map.DrawingTools({
+                                shape:'line',
+                                shown:false
+                              });
+
+tool.setDrawModes(['line']);
+
+var measuringTitle = ui.Label('Measure Length Tool',{fontWeight:'bold',
+                                              backgroundColor:'F0F8FF'});
+
+var len = ui.Label('Slick length:',{backgroundColor:'F0F8FF'});
+
+// Functions for interacting with the map.
+var edit = function(){
+  tool.draw();
+  var layers = tool.layers();
+  layers.get(0).geometries().remove(layers.get(0).geometries().get(0));
+  tool.getSelected().setColor('red');
+};
+
+var stop = function(){
+  
+  tool.stop();
+};
+
+tool.onDraw(function(){
+  var slick = tool.getSelected().toGeometry();
+  var derived = slick.length().divide(1000);
+  
+  derived.evaluate(
+    function(val){
+      len.setValue('Slick length: ' + val.toFixed(2) + 'km');
+    });
+  
+});
+
+var lenPanel = ui.Panel({style:{backgroundColor:'F0F8FF',
+                                position:'bottom-right',
+                                stretch:'horizontal',
+                                border:'2px solid black'}});
+
+var button1 = ui.Button({label:'Click to measure',
+                         onClick:edit,
+                         style:{stretch:'horizontal',
+                         backgroundColor:'F0F8FF'}});
+
+var button2 = ui.Button({label:'Click to stop measuring',
+                         onClick:stop,
+                         style:{stretch:'horizontal',
+                         backgroundColor:'F0F8FF'}});
+
+lenPanel.add(measuringTitle);
+lenPanel.add(button1);
+lenPanel.add(button2);
+lenPanel.add(len);
+Map.add(lenPanel);
+Map.add(tool.setShown(false));
+
 // Visualization parameters for our datasets / widgets.
 var s1Span = {'min':-30,'max':0};
 var s2VisParams = {"opacity":1,"bands":["B4","B3","B2"],"min":260,"max":2400,"gamma":1.4};
@@ -215,6 +277,12 @@ function addScenes(){
     insp.add(ui.Label('Click anywhere on the map to get the ID of the top-most image...',{backgroundColor:'F0F8FF',textAlign:'center'}));
     
     Map.add(insp);
+    
+    
+    
+    Map.remove(Map.drawingTools());
+    Map.add(lenPanel);
+    Map.add(tool.setShown(false));
     // When the map is clicked, this will be triggered.
     Map.onClick(function(coords)
     {
@@ -327,6 +395,8 @@ function addScenes(){
       insp.add(s2ID);
       insp.add(s2Date);
       insp.add(s2Time);
+      insp.add(ui.Label('Download imagery from Copernicus',{backgroundColor:'F0F8FF',textAlign:'center',fontSize:'12px'},
+                        'https://scihub.copernicus.eu/dhus/#/home'));
     });
   }
   // No boundary filter set, so loads in all imagery across the world. Be careful with this!
@@ -372,52 +442,63 @@ function addScenes(){
     s1Time = ui.Label('',{backgroundColor:'F0F8FF',textAlign:'center',fontSize:'12px'});
     s1Date = ui.Label('',{backgroundColor:'F0F8FF',textAlign:'center',fontSize:'12px'});
     s2ID = ui.Textbox({placeholder:'Nothing yet...',style:{backgroundColor:'F0F8FF',textAlign:'center',width:'200px',border:'2px solid black'}});
-
+    s2Time = ui.Label('',{backgroundColor:'F0F8FF',textAlign:'center',fontSize:'12px'});
+    s2Date = ui.Label('',{backgroundColor:'F0F8FF',textAlign:'center',fontSize:'12px'});
     
     insp.add(getOff);
     insp.add(inspectTitle);
     insp.add(ui.Label('Click anywhere on the map to get the ID of the top-most image...',{backgroundColor:'F0F8FF',textAlign:'center'}));
     
     Map.add(insp);
+    Map.remove(Map.drawingTools());
+    Map.add(lenPanel);
+    Map.add(tool.setShown(false));
+    
     Map.onClick(function(coords)
     {
       insp.clear();
+      
       long.setValue(coords.lon);
       lat.setValue(coords.lat);
+      // Create a point at derived lat and long.
       var pt = ee.Geometry.Point(coords.lon,coords.lat);
-      
+    
       // This layer list will be used for the S1/S2 image IDs.
       var layers = Map.layers();
       
       layers.forEach(
         function(ds){
-          
+              
           var coll = ee.ImageCollection(ds.get('eeObject'));
           
           var identifier = coll.geometry();
+          // Is it currently being shown on the map?
           var shown = ds.get('shown');
           
           if(shown === true){
-            
+            // Filter the image collection to our derived point.
             var imList = ee.List(coll.filterBounds(pt).toList(coll.size()));
             
             var listLength = ee.Number(imList.length());
             
-            
+            // If the list has nothing in it, pass to the end.
+            // Otherwise, grab the name of the most recent image in the stack.
             var nameTest = ee.Algorithms.If({
               condition:listLength.gt(0),
               trueCase:ee.Image(imList.get(-1)).get('system:id'),
               falseCase:null
             });
-            
+            // Evaluate called on the name, in order to draw information from it.
+            // This info will be added to our inspector.
             nameTest = nameTest.evaluate(function(val){
                 if (val !== null){
-                  
+                  // Have to cast it back to an image, because .get() makes it a computedValue.
                   val = ee.Image(val);
                   
                   var index = ee.String(val.get('system:index'));
                   
                   var s2Check = ee.Algorithms.If({
+                    // If first two elements of string are not equal to 'S1', it must be 'S2'.
                     condition:ee.Number(index.slice(0,2).compareTo('S1')).neq(0),
                     // This will be an S2 image ID.
                     trueCase:ee.Image(val).get('PRODUCT_ID'),
@@ -425,6 +506,7 @@ function addScenes(){
                     falseCase:ee.Image(val).get('system:index'),
                   });
                   
+                  // Cast s2Check to a string so we can evaluate.
                   s2Check = ee.String(s2Check).evaluate(
                     function(productId){
                       
@@ -445,6 +527,8 @@ function addScenes(){
             });
             
           }
+          // If there's no images shown where the derived point is created, reset all of that
+          // constellation's entries on the inspector tool.
           else{
             
             var nameCond = ee.Number(ee.String(coll.get('system:id')).compareTo('S2')).neq(0);
@@ -466,24 +550,26 @@ function addScenes(){
               trueCase: s2Time.setValue('S2 acquisition time: '),
               falseCase: s1Time.setValue('S1 acquisition time: ')
             });
+            
           }
         });
-      
+      // Add of our widgets to the inspector.
       insp.add(getOff);
       insp.add(inspectTitle);
       insp.add(ui.Label('Longitude: '+coords.lon.toFixed(4)),{backgroundColor:'F0F8FF',textAlign:'center',fontSize:'12px'});
       insp.add(ui.Label('Latitude: '+coords.lat.toFixed(4)),{backgroundColor:'F0F8FF',textAlign:'center',fontSize:'12px'});
       insp.add(ui.Label('============================',{backgroundColor:'F0F8FF',textAlign:'center',fontSize:'12px',fontWeight:'bold'}));
-      insp.add(ui.Label('Top-most Sentinel-1 image:',{backgroundColor:'F0F8FF',textAlign:'center',fontSize:'12px'}));
+      insp.add(ui.Label('Selected Sentinel-1 image:',{backgroundColor:'F0F8FF',textAlign:'center',fontSize:'12px'}));
       insp.add(s1ID);
       insp.add(s1Date);
       insp.add(s1Time);
       insp.add(ui.Label('============================',{backgroundColor:'F0F8FF',textAlign:'center',fontSize:'12px',fontWeight:'bold'}));
-      insp.add(ui.Label('Top-most Sentinel-2 image:',{backgroundColor:'F0F8FF',textAlign:'center',fontSize:'12px'}));
+      insp.add(ui.Label('Selected Sentinel-2 image:',{backgroundColor:'F0F8FF',textAlign:'center',fontSize:'12px'}));
       insp.add(s2ID);
       insp.add(s2Date);
       insp.add(s2Time);
-      
+      insp.add(ui.Label('Download imagery from Copernicus',{backgroundColor:'F0F8FF',textAlign:'center',fontSize:'12px'},
+                        'https://scihub.copernicus.eu/dhus/#/home'));
     });
 }
 }
